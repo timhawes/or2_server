@@ -1,0 +1,355 @@
+#!/usr/bin/env python
+
+import Queue
+import SocketServer
+import base64
+import json
+import logging
+import logging.handlers
+import os
+import pika
+import pprint
+import socket
+import struct
+import sys
+import threading
+import time
+
+if sys.argv[1:] == ["--debug"]:
+    logging.basicConfig(format="%(asctime)-15s %(filename)s:%(lineno)d %(message)s")
+    logging.getLogger().setLevel(logging.DEBUG)
+else:
+    ident = os.path.basename(sys.argv[0])
+    if os.path.exists("/dev/log"):
+        syslog_address = "/dev/log"
+    else:
+        syslog_address = ("127.0.0.1", 514)
+    syslog_format_string = ident + "[%(process)s]: %(message)s"
+    syslog_handler = logging.handlers.SysLogHandler(address=syslog_address, facility=logging.handlers.SysLogHandler.LOG_USER)
+    syslog_handler.log_format_string = "<%d>%s"
+    syslog_handler.setFormatter(logging.Formatter(fmt=syslog_format_string))
+    syslog_handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(syslog_handler)
+    logging.getLogger().setLevel(logging.INFO)
+logging.getLogger("pika").setLevel(logging.WARNING)
+
+import database
+import decoder
+from manager import Reader
+
+amqp_host = "amqp.hacklab"
+
+cards_filename = "/home/cards/cards.conf"
+readers_filename = "/home/cards/readers.conf"
+
+listen_port = 21046
+database_check_interval = 5
+reader_sync_interval = 3600
+client_timeout = 60
+command_socket_path = "/var/run/controller.sock"
+
+queue = Queue.Queue()
+amqp_outbound = Queue.Queue()
+
+readers = {}
+client_id2addr = {}
+client_addr2id = {}
+client_lastrecv = {}
+client_lastsend = {}
+last_database_check = time.time()
+
+class JsonLogger(object):
+    def __init__(self, template="%Y-%m-%d.log", localtime=False):
+        self.template = template
+        if localtime:
+            self.timefunction = time.localtime
+        else:
+            self.timefunction = time.gmtime
+        self.filename = None
+        self.fh = None
+    def write(self, data):
+        if not data.has_key("timestamp"):
+            data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            new_filename = time.strftime(self.template, self.timefunction())
+            if new_filename != self.filename:
+                self.filename = new_filename
+                self.fh = open(self.filename, "a")
+            self.fh.write(json.dumps(data)+"\r\n")
+            self.fh.flush()
+        except Exception:
+            logging.exception("AuthLogger exception")
+
+class CommandThread(threading.Thread):
+    class ProtocolHandler(SocketServer.StreamRequestHandler):
+        def handle(self):
+            line = self.rfile.readline().strip()
+            while line != "":
+                logging.info("cmd> %s" % (line))
+                for reply in self.handle_line(line):
+                    self.wfile.write(reply+"\r\n")
+                line = self.rfile.readline().strip()
+        def handle_line(self, line):
+            args = line.split(" ")
+            cmd = args[0].upper()
+            if args[0] == "SEND_B64":
+                return self.cmd_send_b64(args[1:])
+            if args[0] == "SET":
+                return self.cmd_set(*args[1:4])
+            elif args[0] == "PING":
+                return self.cmd_ping()
+            elif args[0] == "READERS":
+                return self.cmd_readers()
+            else:
+                return ["Unknown command"]
+        def cmd_send_b64(self, args):
+            readerid = args[0].upper()
+            payload = base64.b64decode(args[1])
+            try:
+                addr = client_id2addr[readerid]
+                logging.debug("TO %s %s:%s %r" % (readerid, addr[0], addr[1], payload))
+                try:
+                    sock.sendto(payload, addr)
+                except socket.error:
+                    logging.exception("Error transmitting packet")
+                    yield "Unable to send packet"
+            except KeyError:
+                yield "Unknown reader %s" % (readerid)
+        def cmd_readers(self):
+            yield " ".join(readers)
+        def cmd_set(self, readerid, k, value):
+            readerid = readerid.upper()
+            logging.debug("request to set variable %s to %r" % (k, value))
+            payload = struct.pack("B", 0x97) + decoder.encode_var(k, value)
+            try:
+                addr = client_id2addr[readerid]
+                logging.debug("TO %s %s:%s %r" % (readerid, addr[0], addr[1], payload))
+                try:
+                    sock.sendto(payload, addr)
+                except socket.error:
+                    logging.exception("Error transmitting packet")
+                    yield "Unable to send packet"
+            except KeyError:
+                yield "Unknown reader %s" % (readerid)
+        def cmd_ping(self):
+            yield "PONG"
+    class StreamServer(SocketServer.ThreadingMixIn, SocketServer.UnixStreamServer):
+        pass
+    def loop(self):
+        logging.debug("CommandThread starting")
+        if os.path.exists(command_socket_path):
+            os.unlink(command_socket_path)
+        server = self.StreamServer(command_socket_path, self.ProtocolHandler)
+        server.serve_forever()
+    def run(self):
+        while True:
+            try:
+                self.loop()
+            except Exception:
+                logging.exception("Error in CommandThread")
+            time.sleep(1)
+
+class UDPReceiveThread(threading.Thread):
+    def run(self):
+        global sock
+        while True:
+            data, addr = sock.recvfrom(1024)
+            #logging.debug("Message received from %r: %r" % (addr, data))
+            if len(data) > 1:
+                if data[0] == "\x00":
+                    clientid = data[1:].rstrip("\x00")
+                    client_id2addr[clientid] = addr
+                    client_addr2id["%s:%s" % addr] = clientid
+            try:
+                clientid = client_addr2id["%s:%s" % addr]
+                client_lastrecv[clientid] = time.time()
+                queue.put((clientid, addr, data))
+            except KeyError:
+                pass
+
+
+class AmqpTxThread(threading.Thread):
+    amqp_host = None
+    amqp_exchange = "events"
+
+    def run(self):
+        if self.amqp_host is None:
+            logging.warning("amqp_host not specified, AMQP TX thread aborting")
+            return
+        while True:
+            try:
+                self.loop()
+            except Exception:
+                logging.exception("AMQP TX thread restarted")
+                time.sleep(1)
+    def _reconnect(self):
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.amqp_host, heartbeat_interval=30))
+        self.channel = self.connection.channel()
+        self.channel.exchange_declare(exchange=self.amqp_exchange, type="topic")
+        logging.info("Connected to AMQP (TX)")
+    def loop(self):
+        self._reconnect()
+        while True:
+            topic, payload = amqp_outbound.get(True)
+            if type(payload) is dict:
+                headers = payload
+            else:
+                headers = {}
+            delay = 1
+            max_delay = 60
+            timestamp = time.time()
+            while True:
+                try:
+                    self.channel.basic_publish(exchange=self.amqp_exchange,
+                                               routing_key=topic,
+                                               body=json.dumps(payload),
+                                               properties=pika.BasicProperties(
+                                                     timestamp=timestamp,
+                                                     headers=headers
+                                                     ))
+                    break
+                except Exception, e:
+                    logging.exception("AMQP publish failed (will retry in %ds)" % (delay))
+                    time.sleep(delay)
+                    delay = min(delay*2, max_delay)
+                    self._reconnect()
+
+class AmqpRxThread(threading.Thread):
+    amqp_host = None
+    amqp_exchange = "events"
+
+    def run(self):
+        if self.amqp_host is None:
+            logging.warning("amqp_host not specified, AMQP RX thread aborting")
+            return
+        while True:
+            try:
+                self.loop()
+            except Exception:
+                logging.exception("AMQP RX thread restarted")
+                time.sleep(1)
+    def _reconnect(self):
+        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.amqp_host, heartbeat_interval=30))
+        self.channel = self.connection.channel()
+        self.channel.exchange_declare(exchange=self.amqp_exchange, type="topic")
+        logging.info("Connected to AMQP (RX)")
+    def loop(self):
+        def callback(ch, method, properties, body):
+            topic = method.routing_key
+            if topic == "sensors.pir.g8":
+                readerid = "ESP_OR_00FCA432"
+            else:
+                return
+            try:
+                addr = client_id2addr[readerid]
+                payload = chr(0x90) + chr(0x00) + chr(0x03)
+                logging.debug("TO %s %s:%s %r (renew snib timeout)" % (readerid, addr[0], addr[1], payload))
+                try:
+                    sock.sendto(payload, addr)
+                except socket.error:
+                    #logging.exception("Error transmitting packet")
+                    pass
+            except KeyError:
+                # reader not known
+                pass
+        self._reconnect()
+        result = self.channel.queue_declare(exclusive=True)
+        queue_name = result.method.queue
+        self.channel.queue_bind(exchange=self.amqp_exchange, queue=queue_name, routing_key="sensors.pir.#")
+        self.channel.basic_consume(callback, queue=queue_name, no_ack=True)
+        self.channel.start_consuming()
+
+auth_logger = JsonLogger("/var/log/controller-%Y%m%d.log")
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("0.0.0.0", listen_port))
+
+amqptxthread = AmqpTxThread()
+amqptxthread.amqp_host = amqp_host
+amqptxthread.daemon = True
+amqptxthread.start()
+
+amqprxthread = AmqpRxThread()
+amqprxthread.amqp_host = amqp_host
+amqprxthread.daemon = True
+amqprxthread.start()
+
+udpreceivethread = UDPReceiveThread()
+udpreceivethread.daemon = True
+udpreceivethread.start()
+
+commandthread = CommandThread()
+commandthread.daemon = True
+commandthread.start()
+
+database = database.CardDatabase(cards_filename, readers_filename)
+
+logging.info("Ready to process...")
+
+while True:
+
+    if time.time()-last_database_check > database_check_interval:
+        database.autoreload()
+        last_database_check = time.time()
+
+    try:
+
+        readerid, addr, data = queue.get(True, timeout=10)
+
+        if not readers.has_key(readerid):
+            readers[readerid] = Reader(readerid, database, addr, sync_interval=reader_sync_interval, amqp_outbound=amqp_outbound, auth_logger=auth_logger)
+        reader = readers[readerid]
+        reader.addr = addr
+
+        decoded = decoder.decode_packet(data)
+        #logging.debug("%s > %s" % (readerid, decoder.hexify(data, sep="-")))
+        if decoded:
+            logging.debug("FROM %s %s:%s %s" % (readerid, addr[0], addr[1], decoded["type"]))
+            responses = reader.event(decoded["type"], decoded)
+            for response in responses:
+                encoded_response = decoder.encode_packet(response)
+                if encoded_response is not None:
+                    #logging.debug("%s < %s" % (readerid, decoder.hexify(encoded_response, sep="-")))
+                    logging.debug("TO %s %s:%s" % (readerid, addr[0], addr[1]))
+                    client_lastsend[readerid] = time.time()
+                    try:
+                        sock.sendto(encoded_response, addr)
+                    except socket.error, e:
+                        logging.exception("Error transmitting packet")
+
+            for response in reader.outgoing():
+                encoded_response = decoder.encode_packet(response)
+                if encoded_response is not None:
+                    #logging.debug("%s < %s" % (readerid, decoder.hexify(encoded_response, sep="-")))
+                    logging.debug("TO %s %s:%s" % (readerid, addr[0], addr[1]))
+                    client_lastsend[readerid] = time.time()
+                    try:
+                        sock.sendto(encoded_response, addr)
+                    except socket.error, e:
+                        logging.exception("Error transmitting packet")
+
+    except Queue.Empty:
+        pass
+
+    for readerid in client_lastrecv.keys():
+        if time.time()-client_lastrecv[readerid] > client_timeout:
+            logging.info("%s: idle connection dropped" % (readerid))
+            addr = client_id2addr[readerid]
+            del readers[readerid]
+            del client_id2addr[readerid]
+            del client_lastrecv[readerid]
+            del client_lastsend[readerid]
+            del client_addr2id["%s:%s" % addr]
+
+    for readerid, reader in readers.items():
+        addr = client_id2addr[readerid]
+        for response in reader.outgoing():
+            encoded_response = decoder.encode_packet(response)
+            if encoded_response is not None:
+                #logging.debug("%s < %s" % (readerid, decoder.hexify(encoded_response, sep="-")))
+                logging.debug("TO %s %s:%s" % (readerid, addr[0], addr[1]))
+                client_lastsend[readerid] = time.time()
+                try:
+                    sock.sendto(encoded_response, addr)
+                except socket.error, e:
+                    logging.exception("Error transmitting packet")

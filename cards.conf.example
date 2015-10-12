@@ -1,0 +1,8 @@
+[Agnes Aardvark]
+groups = members directors
+12345678 = NFC Keyfob
+23456789 = Mifare Card
+
+[Bertie Badger]
+groups = members
+3456789A = Yubikey NEO
