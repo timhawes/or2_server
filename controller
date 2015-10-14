@@ -190,29 +190,33 @@ class AmqpTxThread(threading.Thread):
     def loop(self):
         self._reconnect()
         while True:
-            topic, payload = amqp_outbound.get(True)
-            if type(payload) is dict:
-                headers = payload
-            else:
-                headers = {}
-            delay = 1
-            max_delay = 60
-            timestamp = time.time()
-            while True:
-                try:
-                    self.channel.basic_publish(exchange=self.amqp_exchange,
-                                               routing_key=topic,
-                                               body=json.dumps(payload),
-                                               properties=pika.BasicProperties(
-                                                     timestamp=timestamp,
-                                                     headers=headers
-                                                     ))
-                    break
-                except Exception, e:
-                    logging.exception("AMQP publish failed (will retry in %ds)" % (delay))
-                    time.sleep(delay)
-                    delay = min(delay*2, max_delay)
-                    self._reconnect()
+            try:
+                topic, payload = amqp_outbound.get(True, 5)
+                if type(payload) is dict:
+                    headers = payload
+                else:
+                    headers = {}
+                delay = 1
+                max_delay = 60
+                timestamp = time.time()
+                while True:
+                    try:
+                        self.channel.basic_publish(exchange=self.amqp_exchange,
+                                                   routing_key=topic,
+                                                   body=json.dumps(payload),
+                                                   properties=pika.BasicProperties(
+                                                       timestamp=timestamp,
+                                                       headers=headers
+                                                       ))
+                        break
+                    except Exception, e:
+                        logging.exception("AMQP publish failed (will retry in %ds)" % (delay))
+                        time.sleep(delay)
+                        delay = min(delay*2, max_delay)
+                        self._reconnect()
+            except Queue.Empty:
+                pass
+            self.connection.process_data_events()
 
 class AmqpRxThread(threading.Thread):
     amqp_host = None
