@@ -111,6 +111,7 @@ class Reader(object):
         self.sync_scheduled = True
         self.sync_waiting_for_data_since = None
         self.sync_changes_pending = False
+        self.send_amqp_status = False
 
         logging.info("%s: connected from %s:%s" % (readerid, addr[0], addr[1]))
 
@@ -142,6 +143,15 @@ class Reader(object):
                 continue
             if vnew != oldvars[k]:
                 self._variable_changed(k, oldvars[k], vnew)
+        if self.send_amqp_status and self.amqp_outbound:
+            m = {"door": self.reader_name}
+            if self.vars["snibUnlockActive"] is False:
+                m["locked"] = True
+            else:
+                m["locked"] = False
+            m["state"] = self.vars["doorState"]
+            self.amqp_outbound.put(("door.status", m))
+            self.send_amqp_status = False
         return []
 
     def _variable_changed(self, k, vold, vnew):
@@ -186,12 +196,8 @@ class Reader(object):
                 # trigger database refresh
                 self.sync_scheduled = True
                 logging.info("%s: restart detected, scheduling a sync" % (self.readerid))
-        if k == "snibUnlockActive":
-            if self.amqp_outbound:
-                if vnew is True:
-                    self.amqp_outbound.put(("door.status", {"door": self.reader_name, "locked": False}))
-                elif vnew is False:
-                    self.amqp_outbound.put(("door.status", {"door": self.reader_name, "locked": True}))
+        if k in ["snibUnlockActive", "doorState"]:
+            self.send_amqp_status = True
         #if vold is None:
         #    return
         if k in ["batteryAdc", "batteryVoltage", "millis"]:
