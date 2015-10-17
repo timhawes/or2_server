@@ -78,6 +78,7 @@ class Syncer(object):
         for slot in range(0, self.slots):
             if target_data[slot] != self.reader_data[slot]:
                 changelist[slot] = target_data[slot]
+                logging.info("change slot %d: %s -> %s" % (slot, self.reader_data[slot], target_data[slot]))
                 if len(changelist.keys()) >= 128:
                     output.append({"type": "databaseset", "slots": changelist})
                     changelist = {}
