@@ -242,6 +242,8 @@ class AmqpRxThread(threading.Thread):
             topic = method.routing_key
             if topic == "sensors.pir.g8":
                 readerid = "ESP_OR_00FCA432"
+            elif topic == "sensors.pir.g2":
+                readerid = "ESP_OR_00F9071A"
             else:
                 return
             try:
