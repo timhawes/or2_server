@@ -26,6 +26,7 @@ data_variables = {
   0x2D: ["batteryAdc", ">H", None],
   0x2E: ["doorAjar", ">B", {0: False, 1: True}],
   0x2F: ["eepromChangesPending", ">B", {0: False, 1: True}],
+  0x30: ["pn532ResetCount", ">H", None],
   # DYNAMIC WRITABLE
   0x41: ["authState", ">B", {0: "idle", 1: "swiped", 2: "network-granted", 3: "network-denied", 4: "local-granted", 5: "local-denied", 6: "proxy-granted"}],
   0x42: ["snibEnabled", ">B", {0: False, 1: True}],
