@@ -265,7 +265,7 @@ class AmqpRxThread(threading.Thread):
         self.channel.basic_consume(callback, queue=queue_name, no_ack=True)
         self.channel.start_consuming()
 
-auth_logger = JsonLogger("/var/log/controller-%Y%m%d.log")
+auth_logger = JsonLogger("/var/log/controller/%Y%m%d.log")
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("0.0.0.0", listen_port))
