@@ -91,14 +91,16 @@ class Syncer(object):
 
 class Reader(object):
 
-    def __init__(self, readerid, database, addr, 
-                 sync_interval=3600, amqp_outbound=None, auth_logger=None):
+    def __init__(self, readerid, database, addr,
+                 sync_interval=3600, amqp_outbound=None, auth_logger=None,
+                 token_sighting_queue=None):
         self.readerid = readerid
         self.database = database
         self.addr = addr
         self.sync_interval = sync_interval
         self.amqp_outbound = amqp_outbound
         self.auth_logger = auth_logger
+        self.token_sighting_queue = token_sighting_queue
 
         self.database_timestamp = self.database.timestamp()
         self.reader_name = self.database.reader_name(readerid)
@@ -188,6 +190,8 @@ class Reader(object):
                         self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}))
                     else:
                         self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "uid": uid, "authorized": False, "auth_type": message["type"]}))
+                if self.token_sighting_queue:
+                    self.token_sighting_queue.put({"uid": uid})
         if k == "millis":
             if vold is None:
                 pass
