@@ -28,6 +28,7 @@ config = ConfigParser.ConfigParser({
     "reader_sync_interval": 3600,
     "client_timeout": 60,
     "command_socket_path": "/var/run/controller.sock",
+    "send_anonymous": "false",
 })
 config.read("controller.conf")
 
@@ -61,6 +62,7 @@ database_check_interval = config.getint("controller", "database_check_interval")
 reader_sync_interval = config.getint("controller", "reader_sync_interval")
 client_timeout = config.getint("controller", "client_timeout")
 command_socket_path = config.get("controller", "command_socket_path")
+send_anonymous = config.getboolean("controller", "send_anonymous")
 
 queue = Queue.Queue()
 amqp_outbound = Queue.Queue()
@@ -342,7 +344,10 @@ while True:
         readerid, addr, data = queue.get(True, timeout=10)
 
         if not readers.has_key(readerid):
-            readers[readerid] = Reader(readerid, database, addr, sync_interval=reader_sync_interval, amqp_outbound=amqp_outbound, auth_logger=auth_logger, token_sighting_queue=token_sighting_queue)
+            readers[readerid] = Reader(readerid, database, addr,
+                sync_interval=reader_sync_interval,amqp_outbound=amqp_outbound,
+                auth_logger=auth_logger, token_sighting_queue=token_sighting_queue,
+                send_anonymous=send_anonymous)
         reader = readers[readerid]
         reader.addr = addr
 

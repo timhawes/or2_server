@@ -93,7 +93,7 @@ class Reader(object):
 
     def __init__(self, readerid, database, addr,
                  sync_interval=3600, amqp_outbound=None, auth_logger=None,
-                 token_sighting_queue=None):
+                 token_sighting_queue=None, send_anonymous=False):
         self.readerid = readerid
         self.database = database
         self.addr = addr
@@ -101,6 +101,7 @@ class Reader(object):
         self.amqp_outbound = amqp_outbound
         self.auth_logger = auth_logger
         self.token_sighting_queue = token_sighting_queue
+        self.send_anonymous = send_anonymous
 
         self.database_timestamp = self.database.timestamp()
         self.reader_name = self.database.reader_name(readerid)
@@ -161,7 +162,7 @@ class Reader(object):
         if k == "authState":
             if vnew in ["local-granted", "local-denied", "network-granted", "network-denied"]:
                 uid = self.vars.get("authUid", None)
-                authorized, name, token_name = self.database.auth(self.readerid, uid)
+                authorized, name, token_name, private = self.database.auth(self.readerid, uid)
                 message = {
                     "uid": uid,
                     "name": name,
@@ -187,7 +188,11 @@ class Reader(object):
                     self.auth_logger.write(message)
                 if self.amqp_outbound:
                     if authorized == True:
-                        self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}))
+                        if private:
+                            if self.send_anonymous:
+                                self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "name": "Anonymous", "token": "Anonymous", "authorized": True, "auth_type": message["type"]}))
+                        else:
+                            self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}))
                     else:
                         self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "uid": uid, "authorized": False, "auth_type": message["type"]}))
                 if self.token_sighting_queue:
@@ -211,7 +216,7 @@ class Reader(object):
 
     def event_authrequest(self, data):
         uid = data['uid']
-        authorized, name, token = self.database.auth(self.readerid, uid)
+        authorized, name, token, private = self.database.auth(self.readerid, uid)
         if authorized:
             return [{"type": "authresponse", "authorized": True, "uid": uid}]
         else:

@@ -19,12 +19,15 @@ class CardDatabase(object):
         c = ConfigParser.ConfigParser()
         c.read(self.cards_filename)
         for name in c.sections():
-            data[name] = {"cards": {}, "groups": []}
+            data[name] = {"cards": {}, "groups": [], "private": False}
             if c.has_option(name, "groups"):
                 data[name]["groups"] = c.get(name, "groups").strip().split()
+            if c.has_option(name, "private"):
+                data[name]["private"] = c.getboolean(name, "private")
+                logging.info("user %s private=%s" % (name, data[name]["private"]))
             for uid in c.options(name):
                 if len(uid) == 8 or len(uid) == 14:
-                    if uid != "groups":
+                    if uid not in ["groups", "private"]:
                         data[name]["cards"][uid.upper()] = c.get(name, uid)
         return data
 
@@ -80,9 +83,10 @@ class CardDatabase(object):
                     for group in self.data["people"][person]["groups"]:
                         if group in allowed_groups:
                             logging.info("uid %s (%s) is authorized to use reader %s via group %s" % (uid, person, reader, group))
-                            return True, person, token_name
+                            private = self.data["people"][person]["private"]
+                            return True, person, token_name, private
         logging.info("uid %s is not authorized to use reader %s" % (uid, reader))
-        return False, None, None
+        return False, None, None, None
 
     def cards_for_reader(self, reader):
         uids = {}
