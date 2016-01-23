@@ -4,12 +4,15 @@ import ConfigParser
 import Queue
 import SocketServer
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import logging.handlers
 import os
 import pika
 import pprint
+import requests
 import socket
 import struct
 import sys
@@ -188,6 +191,8 @@ class TokenSightingThread(threading.Thread):
     def run(self):
         logging.info("Starting TokenSightingThread")
         self.url = config.get("controller", "token_sighting_url", None)
+        self.api_key = config.get("controller", "token_sighting_key", "")
+        self.api_secret = config.get("controller", "token_sighting_secret", "")
         if self.url is None:
             logging.warning("token_sighting_url not specified, TokenSightingThread aborting")
             return
@@ -199,11 +204,15 @@ class TokenSightingThread(threading.Thread):
                 time.sleep(1)
     def loop(self):
         while True:
-            data = token_sighting_queue.get(True)
-            logging.info("reporting token %s" % (data["uid"]))
-            u = urllib2.urlopen(self.url % (data["uid"]), "")
-            u.read()
-            u.close()
+            msg = token_sighting_queue.get(True)
+            h = hmac.HMAC(self.api_secret.encode('utf8'), digestmod=hashlib.sha512)
+            for k in sorted(msg.keys()):
+                if k not in ["api_key", "api_hmac_sha512"]:
+                    h.update(("%s=%s:" % (k, msg[k])).encode('utf8'))
+            msg['api_key'] = self.api_key
+            msg['api_hmac_sha512'] = h.hexdigest()
+            r = requests.post(self.url, data=json.dumps(msg))
+            logging.info("sent token_sighting request, reply: %r" % (r.text))
 
 class AmqpTxThread(threading.Thread):
     amqp_host = None

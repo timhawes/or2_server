@@ -196,7 +196,7 @@ class Reader(object):
                     else:
                         self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "uid": uid, "authorized": False, "auth_type": message["type"]}))
                 if self.token_sighting_queue:
-                    self.token_sighting_queue.put({"uid": uid})
+                    self.token_sighting_queue.put({"door": self.reader_name, "uid": uid, "authorized": authorized})
         if k == "millis":
             if vold is None:
                 pass
