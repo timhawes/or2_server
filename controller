@@ -10,6 +10,7 @@ import json
 import logging
 import logging.handlers
 import os
+import paho.mqtt.client as mqtt
 import pika
 import pprint
 import requests
@@ -23,7 +24,9 @@ import urllib2
 os.chdir(os.path.dirname(sys.argv[0]))
 
 config = ConfigParser.ConfigParser({
-    "amqp_host": "amqp",
+    "amqp_host": None,
+    "mqtt_host": None,
+    "mqtt_topic": "or2_controller",
     "cards_file": "cards.conf",
     "readers_file": "readers.conf",
     "listen_port": 21046,
@@ -58,6 +61,8 @@ import decoder
 from manager import Reader
 
 amqp_host = config.get("controller", "amqp_host")
+mqtt_host = config.get("controller", "mqtt_host")
+mqtt_topic = config.get("controller", "mqtt_topic")
 cards_filename = config.get("controller", "cards_file")
 readers_filename = config.get("controller", "readers_file")
 listen_port = config.getint("controller", "listen_port")
@@ -69,6 +74,7 @@ send_anonymous = config.getboolean("controller", "send_anonymous")
 
 queue = Queue.Queue()
 amqp_outbound = Queue.Queue()
+mqtt_outbound = Queue.Queue()
 token_sighting_queue = Queue.Queue()
 
 readers = {}
@@ -311,6 +317,52 @@ class AmqpRxThread(threading.Thread):
         self.channel.basic_consume(callback, queue=queue_name, no_ack=True)
         self.channel.start_consuming()
 
+class MqttTxThread(threading.Thread):
+    mqtt_host = None
+    mqtt_topic = None
+
+    def run(self):
+        if self.mqtt_host is None:
+            logging.warning("mqtt_host not specified, MQTT TX thread aborting")
+            return
+        while True:
+            try:
+                self.loop()
+            except Exception:
+                logging.exception("MQTT TX thread restarted")
+                time.sleep(1)
+    def _reconnect(self):
+        self.connection = mqtt.Client()
+        self.connection.connect(self.mqtt_host)
+        #self.connection.loop_start()
+        logging.info("Connected to MQTT (TX)")
+    def loop(self):
+        self._reconnect()
+        while True:
+            try:
+                topic, data, retain = mqtt_outbound.get(True, 1)
+                if type(data) is dict:
+                    payload = json.dumps(data)
+                elif type(data) is None:
+                    payload = ""
+                else:
+                	payload = str(data)
+                delay = 1
+                max_delay = 60
+                timestamp = time.time()
+                while True:
+                    try:
+                        self.connection.publish("%s/%s" % (self.mqtt_topic, topic), payload=payload, retain=retain)
+                        break
+                    except Exception, e:
+                        logging.exception("MQTT publish failed (will retry in %ds)" % (delay))
+                        time.sleep(delay)
+                        delay = min(delay*2, max_delay)
+                        self._reconnect()
+            except Queue.Empty:
+                pass
+            self.connection.loop()
+
 auth_logger = JsonLogger("/var/log/controller/%Y%m%d.log")
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -325,6 +377,12 @@ amqprxthread = AmqpRxThread()
 amqprxthread.amqp_host = amqp_host
 amqprxthread.daemon = True
 amqprxthread.start()
+
+mqtttxthread = MqttTxThread()
+mqtttxthread.mqtt_host = mqtt_host
+mqtttxthread.mqtt_topic = mqtt_topic
+mqtttxthread.daemon = True
+mqtttxthread.start()
 
 udpreceivethread = UDPReceiveThread()
 udpreceivethread.daemon = True
@@ -356,7 +414,7 @@ while True:
             readers[readerid] = Reader(readerid, database, addr,
                 sync_interval=reader_sync_interval,amqp_outbound=amqp_outbound,
                 auth_logger=auth_logger, token_sighting_queue=token_sighting_queue,
-                send_anonymous=send_anonymous)
+                send_anonymous=send_anonymous, mqtt_outbound=mqtt_outbound)
         reader = readers[readerid]
         reader.addr = addr
 

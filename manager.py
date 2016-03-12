@@ -93,12 +93,13 @@ class Reader(object):
 
     def __init__(self, readerid, database, addr,
                  sync_interval=3600, amqp_outbound=None, auth_logger=None,
-                 token_sighting_queue=None, send_anonymous=False):
+                 token_sighting_queue=None, send_anonymous=False, mqtt_outbound=None):
         self.readerid = readerid
         self.database = database
         self.addr = addr
         self.sync_interval = sync_interval
         self.amqp_outbound = amqp_outbound
+        self.mqtt_outbound = mqtt_outbound
         self.auth_logger = auth_logger
         self.token_sighting_queue = token_sighting_queue
         self.send_anonymous = send_anonymous
@@ -159,6 +160,9 @@ class Reader(object):
         return []
 
     def _variable_changed(self, k, vold, vnew):
+        if self.mqtt_outbound:
+            if k not in ["authUid", "millis"]:
+                self.mqtt_outbound.put(("%s/var/%s" % (self.readerid, k), vnew, True))
         if k == "authState":
             if vnew in ["local-granted", "local-denied", "network-granted", "network-denied"]:
                 uid = self.vars.get("authUid", None)
@@ -195,6 +199,15 @@ class Reader(object):
                             self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}))
                     else:
                         self.amqp_outbound.put(("door.swipe", {"door": self.reader_name, "reader": "nfc", "uid": uid, "authorized": False, "auth_type": message["type"]}))
+                if self.mqtt_outbound:
+                    if authorized == True:
+                        if private:
+                            if self.send_anonymous:
+                                self.mqtt_outbound.put(("%s/auth" % (self.readerid), {"door": self.reader_name, "reader": "nfc", "name": "Anonymous", "token": "Anonymous", "authorized": True, "auth_type": message["type"]}, False))
+                        else:
+                            self.mqtt_outbound.put(("%s/auth" % (self.readerid), {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}, False))
+                    else:
+                        self.mqtt_outbound.put(("%s/auth" % (self.readerid), {"door": self.reader_name, "reader": "nfc", "uid": uid, "authorized": False, "auth_type": message["type"]}, False))
                 if self.token_sighting_queue:
                     self.token_sighting_queue.put({"door": self.reader_name, "uid": uid, "authorized": authorized})
         if k == "millis":
