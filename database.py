@@ -36,12 +36,14 @@ class CardDatabase(object):
         c = ConfigParser.ConfigParser()
         c.read(self.readers_filename)
         for readerid in c.sections():
-            data[readerid] = {"name": readerid, "groups": [], "settings": {}}
+            data[readerid] = {"name": readerid, "id": readerid, "groups": [], "settings": {}}
             for option in c.options(readerid):
                 if option.lower() == "name":
                     data[readerid]["name"] = c.get(readerid, "name")
                 elif option.lower() == "groups":
                     data[readerid]["groups"] = c.get(readerid, "groups").strip().split()
+                elif option.lower() == "id":
+                    data[readerid]["id"] = c.get(readerid, "id")
                 else:
                     data[readerid]["settings"][option] = c.get(readerid, option)
         return data
@@ -101,6 +103,9 @@ class CardDatabase(object):
 
     def reader_name(self, reader):
         return self.data["readers"][reader].get("name", reader)
+
+    def reader_id(self, reader):
+        return self.data["readers"][reader].get("id", reader)
 
     def reader_settings(self, reader):
         return self.data["readers"][reader]["settings"]

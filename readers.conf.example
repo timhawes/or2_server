@@ -1,11 +1,14 @@
 [ESP_OR_89FAB407]
 name = Room 1
+id = room1
 groups = members
 
 [ESP_OR_C405A744]
 name = Room 2
+id = room2
 groups = members
 
 [ESP_OR_6F33063E]
 name = Executive Washroom
+id = exec-washroom
 groups = directors
