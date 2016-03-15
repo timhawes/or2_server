@@ -4,6 +4,9 @@ import os
 import string
 import ConfigParser
 
+class ReaderNotFound(Exception):
+	pass
+	
 class CardDatabase(object):
 
     def __init__(self, cards_filename, readers_filename):
@@ -102,7 +105,10 @@ class CardDatabase(object):
         return sorted(uids.keys())
 
     def reader_name(self, reader):
-        return self.data["readers"][reader].get("name", reader)
+        try:
+            return self.data["readers"][reader]["name"]
+        except KeyError:
+    	    raise ReaderNotFound
 
     def reader_id(self, reader):
         return self.data["readers"][reader].get("id", reader)

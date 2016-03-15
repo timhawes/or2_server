@@ -82,6 +82,7 @@ client_id2addr = {}
 client_addr2id = {}
 client_lastrecv = {}
 client_lastsend = {}
+readernotfound_timestamp = {}
 last_database_check = time.time()
 
 class JsonLogger(object):
@@ -396,14 +397,14 @@ tokensightingthread = TokenSightingThread()
 tokensightingthread.daemon = True
 tokensightingthread.start()
 
-database = database.CardDatabase(cards_filename, readers_filename)
+db = database.CardDatabase(cards_filename, readers_filename)
 
 logging.info("Ready to process...")
 
 while True:
 
     if time.time()-last_database_check > database_check_interval:
-        database.autoreload()
+        db.autoreload()
         last_database_check = time.time()
 
     try:
@@ -411,10 +412,16 @@ while True:
         readerid, addr, data = queue.get(True, timeout=10)
 
         if not readers.has_key(readerid):
-            readers[readerid] = Reader(readerid, database, addr,
-                sync_interval=reader_sync_interval,amqp_outbound=amqp_outbound,
-                auth_logger=auth_logger, token_sighting_queue=token_sighting_queue,
-                send_anonymous=send_anonymous, mqtt_outbound=mqtt_outbound)
+            try:
+                readers[readerid] = Reader(readerid, db, addr,
+                    sync_interval=reader_sync_interval,amqp_outbound=amqp_outbound,
+                    auth_logger=auth_logger, token_sighting_queue=token_sighting_queue,
+                    send_anonymous=send_anonymous, mqtt_outbound=mqtt_outbound)
+            except database.ReaderNotFound:
+                if time.time() - readernotfound_timestamp.get(readerid, 0) > 300:
+                    logging.info("Unknown reader %s, ignoring" % (readerid))
+                    readernotfound_timestamp[readerid] = time.time()
+                continue
         reader = readers[readerid]
         reader.addr = addr
 
