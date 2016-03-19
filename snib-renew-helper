@@ -1,0 +1,49 @@
+#!/usr/bin/env python
+#
+# This script monitors PIR activity and renews the door snib status as long
+# as someone is present within a room.
+
+import base64
+import paho.mqtt.client as mqtt
+import socket
+import time
+
+hostname = "mqtt.hacklab"
+socket_path = "/var/run/controller.sock"
+repeat_time = 30
+
+eventmap = {
+    "sensor/g1/pir": "ESP_OR_0004CE0C",
+    "sensor/g2/pir": "ESP_OR_00F9071A",
+    "sensor/g8/pir": "ESP_OR_00FCA432",
+}
+
+last_send = {}
+
+def send_command(readerid, message):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(socket_path)
+    s.send("SEND_B64 %s %s\r\n" % (readerid, base64.b64encode(message)))
+    s.close()
+
+def on_connect(client, userdata, flags, rc):
+    client.subscribe("sensor/+/pir")
+
+def on_message(client, userdata, msg):
+    try:
+        readerid = eventmap[msg.topic]
+        if time.time() - last_send.get(readerid, 0) > repeat_time:
+            message = "\x90\x00\x03"
+            last_send[readerid] = time.time()
+            print time.ctime(), "sending %s %s" % (msg.topic, readerid)
+            send_command(readerid, message)
+        else:
+            print time.ctime(), "ignoring %s %s" % (msg.topic, readerid)
+    except KeyError:
+        pass
+
+m = mqtt.Client()
+m.on_message = on_message
+m.on_connect = on_connect
+m.connect(hostname)
+m.loop_forever()

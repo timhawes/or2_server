@@ -271,53 +271,6 @@ class AmqpTxThread(threading.Thread):
                 pass
             self.connection.process_data_events()
 
-class AmqpRxThread(threading.Thread):
-    amqp_host = None
-    amqp_exchange = "events"
-
-    def run(self):
-        if self.amqp_host is None:
-            logging.warning("amqp_host not specified, AMQP RX thread aborting")
-            return
-        while True:
-            try:
-                self.loop()
-            except Exception:
-                logging.exception("AMQP RX thread restarted")
-                time.sleep(1)
-    def _reconnect(self):
-        self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.amqp_host, heartbeat_interval=30))
-        self.channel = self.connection.channel()
-        self.channel.exchange_declare(exchange=self.amqp_exchange, type="topic")
-        logging.info("Connected to AMQP (RX)")
-    def loop(self):
-        def callback(ch, method, properties, body):
-            topic = method.routing_key
-            if topic == "sensors.pir.g8":
-                readerid = "ESP_OR_00FCA432"
-            elif topic == "sensors.pir.g2":
-                readerid = "ESP_OR_00F9071A"
-            else:
-                return
-            try:
-                addr = client_id2addr[readerid]
-                payload = chr(0x90) + chr(0x00) + chr(0x03)
-                logging.debug("TO %s %s:%s %r (renew snib timeout)" % (readerid, addr[0], addr[1], payload))
-                try:
-                    sock.sendto(payload, addr)
-                except socket.error:
-                    #logging.exception("Error transmitting packet")
-                    pass
-            except KeyError:
-                # reader not known
-                pass
-        self._reconnect()
-        result = self.channel.queue_declare(exclusive=True)
-        queue_name = result.method.queue
-        self.channel.queue_bind(exchange=self.amqp_exchange, queue=queue_name, routing_key="sensors.pir.#")
-        self.channel.basic_consume(callback, queue=queue_name, no_ack=True)
-        self.channel.start_consuming()
-
 class MqttTxThread(threading.Thread):
     mqtt_host = None
     mqtt_topic = None
@@ -373,11 +326,6 @@ amqptxthread = AmqpTxThread()
 amqptxthread.amqp_host = amqp_host
 amqptxthread.daemon = True
 amqptxthread.start()
-
-amqprxthread = AmqpRxThread()
-amqprxthread.amqp_host = amqp_host
-amqprxthread.daemon = True
-amqprxthread.start()
 
 mqtttxthread = MqttTxThread()
 mqtttxthread.mqtt_host = mqtt_host
