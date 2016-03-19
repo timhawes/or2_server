@@ -35,10 +35,7 @@ def on_message(client, userdata, msg):
         if time.time() - last_send.get(readerid, 0) > repeat_time:
             message = "\x90\x00\x03"
             last_send[readerid] = time.time()
-            print time.ctime(), "sending %s %s" % (msg.topic, readerid)
             send_command(readerid, message)
-        else:
-            print time.ctime(), "ignoring %s %s" % (msg.topic, readerid)
     except KeyError:
         pass
 

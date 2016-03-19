@@ -43,8 +43,6 @@ def on_message(client, userdata, msg):
     global last_pir
     global exit_enabled
 
-    print msg.topic, msg.payload
-
     if msg.topic == "or2_controller/%s/var/exitEnabled" % (roomid):
         exitEnabled = parse_boolean(msg.payload)
 
