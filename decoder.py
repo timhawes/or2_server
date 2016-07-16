@@ -37,7 +37,7 @@ data_variables = {
   0x44: ["doorForced", ">B", {0: False, 1: True}],
   # PERSISTENT WRITABLE
   0x61: ["cardUnlockTime", ">B", None],
-  0x62: ["exitUnlockMinTime", ">B", 100.0],
+  0x62: ["exitUnlockMinTime", ">B", None],
   0x63: ["exitUnlockMaxTime", ">B", None],
   0x64: ["snibUnlockTime", ">H", None],
   0x65: ["pn532CheckInterval", ">B", None],
@@ -59,6 +59,7 @@ data_variables = {
   0x75: ["helloFastInterval", ">B", 100.0],
   0x76: ["helloSlowInterval", ">B", None],
   0x77: ["helloResponseTimeout", ">B", None],
+  0x78: ["snibButtonMode", ">B", None],
 }
 
 def reverse_data_variables(fwd):
