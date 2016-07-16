@@ -218,8 +218,9 @@ class TokenSightingThread(threading.Thread):
                     h.update(("%s=%s:" % (k, msg[k])).encode('utf8'))
             msg['api_key'] = self.api_key
             msg['api_hmac_sha512'] = h.hexdigest()
-            r = requests.post(self.url, data=json.dumps(msg))
-            logging.info("sent token_sighting request, reply: %r" % (r.text))
+            for url in self.url.split(" "):
+                r = requests.post(url, data=json.dumps(msg))
+                logging.info("sent token_sighting request to %s, reply: %r" % (url, r.text))
 
 class AmqpTxThread(threading.Thread):
     amqp_host = None
