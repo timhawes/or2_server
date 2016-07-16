@@ -7,6 +7,9 @@ import base64
 import paho.mqtt.client as mqtt
 import socket
 import time
+import logging
+
+logging.basicConfig()
 
 hostname = "mqtt.hacklab"
 socket_path = "/var/run/controller.sock"
@@ -49,11 +52,13 @@ def on_message(client, userdata, msg):
     elif msg.topic == "sensor/%s/pir" % (roomid):
         last_pir = time.time()
         if exit_enabled is not True:
+            logging.info("enabling exit")
             send_command(readerid, "\x89\x01")
 
     elif msg.topic == "timesignal/60":
         if time.time() - last_pir > pir_timeout:
             if exit_enabled is not False:
+                logging.info("disabling exit")
                 send_command(readerid, "\x89\x00")
 
 m = mqtt.Client()
