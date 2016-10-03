@@ -146,7 +146,7 @@ class CommandThread(threading.Thread):
             yield " ".join(readers)
         def cmd_set(self, readerid, k, value):
             readerid = readerid.upper()
-            logging.debug("request to set variable %s to %r" % (k, value))
+            logging.info("request to set variable %s to %r" % (k, value))
             payload = struct.pack("B", 0x97) + decoder.encode_var(k, value)
             try:
                 addr = client_id2addr[readerid]
