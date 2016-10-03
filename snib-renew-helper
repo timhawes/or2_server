@@ -16,6 +16,7 @@ eventmap = {
     "sensor/g1/pir": "ESP_OR_0004CE0C",
     "sensor/g2/pir": "ESP_OR_00F9071A",
     "sensor/g8/pir": "ESP_OR_00FCA432",
+    "sensor/g11/pir": "ESP_OR_0004CF97",
 }
 
 last_send = {}
