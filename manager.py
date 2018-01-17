@@ -113,6 +113,7 @@ class Reader(object):
         self.var_timestamps = {}
         self.cards = {}
         self.card_timestamps = {}
+        self.door_state = "unknown"
 
         self.sync_scheduled = True
         self.sync_waiting_for_data_since = None
@@ -120,6 +121,16 @@ class Reader(object):
         self.send_amqp_status = False
 
         logging.info("%s: connected from %s:%s" % (readerid, addr[0], addr[1]))
+        if self.mqtt_outbound:
+            self.mqtt_outbound.put(("%s/connected" % (self.mqtt_readerid), True, True))
+
+    def __del__(self):
+        if self.mqtt_outbound:
+            self.mqtt_outbound.put(("%s/connected" % (self.mqtt_readerid), False, True))
+
+    def send_mqtt(self, topic, payload, retain=True):
+        if self.mqtt_outbound:
+            self.mqtt_outbound.put(("%s/%s" % (self.mqtt_readerid, topic), payload, retain))
 
     def event(self, event_type, data):
         if event_type == "hello":
@@ -164,6 +175,22 @@ class Reader(object):
         if self.mqtt_outbound:
             if k not in ["authUid", "millis", "macAddress", "chipId", "flashChipId"]:
                 self.mqtt_outbound.put(("%s/var/%s" % (self.mqtt_readerid, k), vnew, True))
+            if k in ["doorState", "snibUnlockActive", "exitUnlockActive", "cardUnlockActive"]:
+                door = self.reader_name.lower()
+                if self.vars["doorState"] == "closed":
+                    if self.vars["snibUnlockActive"] is False and self.vars["exitUnlockActive"] is False and self.vars["cardUnlockActive"] is False:
+                        new_door_state = "secure"
+                    elif self.vars["snibUnlockActive"] is True or self.vars["exitUnlockActive"] is True or self.vars["cardUnlockActive"] is True:
+                        new_door_state = "closed"
+                    else:
+                        new_door_state = "unknown"
+                elif self.vars["doorState"] == "open":
+                    new_door_state = "open"
+                else:
+                    new_door_state = "unknown"
+                if new_door_state != self.door_state:
+                    self.mqtt_outbound.put(("/sensor/%s/door" % (door), new_door_state, True))
+                    self.door_state = new_door_state
         if k == "authState":
             if vnew in ["local-granted", "local-denied", "network-granted", "network-denied"]:
                 uid = self.vars.get("authUid", None)
@@ -204,7 +231,7 @@ class Reader(object):
                     if authorized == True:
                         if private:
                             if self.send_anonymous:
-                                self.mqtt_outbound.put(("%s/auth" % (self.mqtt_readerid), {"door": self.reader_name, "reader": "nfc", "name": "Anonymous", "token": "Anonymous", "authorized": True, "auth_type": message["type"]}, False))
+                                self.mqtt_outbound.put(("%s/auth" % (self.mqtt_readerid), {"door": self.reader_name, "reader": "nfc", "name": "anonymous", "token": "anonymous", "authorized": True, "auth_type": message["type"], "anonymous": True}, False))
                         else:
                             self.mqtt_outbound.put(("%s/auth" % (self.mqtt_readerid), {"door": self.reader_name, "reader": "nfc", "name": name, "token": token_name, "authorized": True, "auth_type": message["type"]}, False))
                     else:
@@ -257,6 +284,7 @@ class Reader(object):
             if self.sync_scheduled is False:
                 logging.info("%s: database has been reloaded, scheduling a sync" % (self.readerid))
                 self.sync_scheduled = True
+                self.send_mqtt("sync", "check")
 
         #if time.time()-self.lastDatabaseRequest > self.sync_interval and self.sync_requested is False:
         #    logging.info("%s: last sync was more than %s seconds ago, scheduling another sync" % (self.readerid, self.sync_interval))
@@ -271,6 +299,7 @@ class Reader(object):
                 yield {"type": "databaserequest", "start": 0, "end": self.vars["cardDatabaseSize"]-1}
                 self.sync_waiting_for_data_since = time.time()
                 self.sync_scheduled = False
+                self.send_mqtt("sync", "waitingfordata")
                 #self.sync_requested = False
                 #self.sync_in_progress = True
 
@@ -285,16 +314,21 @@ class Reader(object):
                     #print "sync: sending changes"
                     changes = 0
                     self.syncer.setUids(self.database.cards_for_reader(self.readerid))
-                    for response in self.syncer.changes():
-                        changes += len(response["slots"])
-                        #print "sync: %r" % (response)
-                        yield response
+                    changelist = self.syncer.changes()
+                    if len(changelist) > 0:
+                        self.send_mqtt("sync", "sendingchanges")
+                        for response in changelist:
+                            changes += len(response["slots"])
+                            #print "sync: %r" % (response)
+                            yield response
+                        self.send_mqtt("sync", "changessent")
                     #self.lastDatabaseCheck = time.time()
                     #self.sync_in_progress = False
                     if changes > 0:
                         logging.info("%s: sync - %s change(s) made, scheduling re-sync to verify" % (self.readerid, changes))
                         self.sync_scheduled = True
                         self.sync_changes_pending = True
+                        self.send_mqtt("sync", "verifying")
                     else:
                         if self.sync_changes_pending:
                             logging.info("%s: sync - 0 changes made, committing" % (self.readerid))
@@ -302,8 +336,10 @@ class Reader(object):
                             self.sync_changes_pending = False
                         else:
                             logging.info("%s: sync - 0 changes made" % (self.readerid))
+                        self.send_mqtt("sync", "uptodate")
                     #print "sync: %d changes sent" % (changes)
                 else:
                     if time.time()-self.sync_waiting_for_data_since > 10:
                         logging.warning("%s: sync - timeout waiting for data from reader, scheduling a new sync" % (self.readerid))
                         self.sync_scheduled = True
+                        self.send_mqtt("sync", "check")
