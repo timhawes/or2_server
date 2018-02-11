@@ -73,7 +73,10 @@ command_socket_path = config.get("controller", "command_socket_path")
 send_anonymous = config.getboolean("controller", "send_anonymous")
 
 queue = Queue.Queue()
-amqp_outbound = Queue.Queue()
+if amqp_host:
+    amqp_outbound = Queue.Queue()
+else:
+    amqp_outbound = None
 mqtt_outbound = Queue.Queue()
 token_sighting_queue = Queue.Queue()
 
