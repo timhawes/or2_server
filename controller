@@ -298,7 +298,7 @@ class MqttTxThread(threading.Thread):
         self._reconnect()
         while True:
             try:
-                topic, data, retain = mqtt_outbound.get(True, 1)
+                topic, data, retain = self.mqtt_outbound.get(True, 1)
                 if type(data) is dict:
                     payload = json.dumps(data)
                 elif type(data) is None:
@@ -310,7 +310,11 @@ class MqttTxThread(threading.Thread):
                 timestamp = time.time()
                 while True:
                     try:
-                        self.connection.publish("%s/%s" % (self.mqtt_topic, topic), payload=payload, retain=retain)
+                        if topic.startswith("/"):
+                            self.connection.publish(topic[1:], payload=payload, retain=retain)
+                        else:
+                            # prefix with script-wide topic
+                            self.connection.publish("%s/%s" % (self.mqtt_topic, topic), payload=payload, retain=retain)
                         break
                     except Exception, e:
                         logging.exception("MQTT publish failed (will retry in %ds)" % (delay))
@@ -334,6 +338,7 @@ amqptxthread.start()
 mqtttxthread = MqttTxThread()
 mqtttxthread.mqtt_host = mqtt_host
 mqtttxthread.mqtt_topic = mqtt_topic
+mqtttxthread.mqtt_outbound = mqtt_outbound
 mqtttxthread.daemon = True
 mqtttxthread.start()
 
