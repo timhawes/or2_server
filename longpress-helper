@@ -1,0 +1,58 @@
+#!/usr/bin/env python
+#
+# This script monitors PIR activity for a room and enables/disables the exit
+# function of the door controller as the PIR status changes.
+
+import base64
+import paho.mqtt.client as mqtt
+import socket
+import time
+import logging
+
+logging.basicConfig()
+
+hostname = "mqtt.hacklab"
+socket_path = "/var/run/controller.sock"
+
+state = False
+
+def parse_boolean(v):
+    if str(v).lower() in ["0", "no", "n", "false", "f"]:
+        return False
+    elif str(v).lower() in ["1", "yes", "y", "true", "t"]:
+        return True
+    elif str(v).lower() in ["", "none", "null"]:
+        return None
+    else:
+        raise ValueError
+
+def send_command(readerid, message):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(socket_path)
+    s.send("SEND_B64 %s %s\r\n" % (readerid, base64.b64encode(message)))
+    s.close()
+
+def on_connect(client, userdata, flags, rc):
+    client.subscribe("or2_controller/g1/var/snibUnlockActive")
+    client.subscribe("or2_controller/g1/var/snibButtonState")
+
+def on_message(client, userdata, msg):
+    global state
+
+    if msg.topic == "or2_controller/g1/var/snibUnlockActive":
+        state = parse_boolean(msg.payload)
+
+    if msg.topic == "or2_controller/g1/var/snibButtonState":
+        if msg.payload == "longpress":
+            if state is False:
+                send_command("ESP_OR_00F9071A", "\x90\x00\x01")
+                send_command("ESP_OR_00FCA432", "\x90\x00\x01")
+            if state is True:
+                send_command("ESP_OR_00F9071A", "\x90\x00\x02")
+                send_command("ESP_OR_00FCA432", "\x90\x00\x02")
+
+m = mqtt.Client()
+m.on_message = on_message
+m.on_connect = on_connect
+m.connect(hostname)
+m.loop_forever()
